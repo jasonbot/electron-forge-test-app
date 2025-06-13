@@ -10,6 +10,17 @@ const log = debug("electron-forge:maker:msix")
 
 export type MSIXCodesignOptions = Omit<SignOptions, "appDirectory">
 
+type PathInManifest = string
+type PathOnDisk = string
+type FileMapping = Record<PathInManifest, PathOnDisk>
+
+export type MakerMSIXConfig = {
+  appIcon: string
+  makeAppXPath?: string
+  codesign?: MSIXCodesignOptions
+  protocols?: string[]
+}
+
 async function* walk(dir: string): AsyncGenerator<string> {
   for await (const d of await fs.opendir(dir)) {
     const entry = path.join(dir, d.name)
@@ -55,41 +66,58 @@ const codesign = async (config: MakerMSIXConfig, outPath: string) => {
   }
 }
 
-export type MakerMSIXConfig = {
-  makeAppXPath?: string
-  codesign?: MSIXCodesignOptions
-}
+const inventoryInstallFilesForMapping = async (
+  rootPath: string,
+  options: MakerOptions
+): Promise<FileMapping> => {
+  const fileMapping: FileMapping = {}
 
-const makeFileMappingAndFindMainExe = async (
-  options: MakerOptions,
-  mappingFileName: string,
-  rootPath: string
-): Promise<string | undefined> => {
-  let mainExe: string | undefined
-
-  log(`Writing file mapping to ${mappingFileName}`)
-  let content = "[Files]\n"
-  for await (const fileName of await walk(rootPath)) {
-    const relativeFileName =
+  for await (const fileName of walk(rootPath)) {
+    const relativeFileName: PathInManifest =
       `VFS\\UserProgramFiles\\${options.appName}\\` +
       fileName.substring(rootPath.length).replace(/^[\\/]+/, "")
-    // Did we fine the executable?
-    if (relativeFileName.toLowerCase().endsWith(".exe") && !mainExe) {
-      mainExe = relativeFileName
-    }
-    content += `"${fileName}" "${relativeFileName}"\n`
+
+    fileMapping[relativeFileName] = fileName
   }
 
-  await fs.writeFile(mappingFileName, content)
-
-  return mainExe
+  return fileMapping
 }
 
-const makeAppManifest = async (manifestFilename: string) => {
-  log(`Writing app manifest to ${manifestFilename}`)
-  const content = ""
+const makeAppXImages = async (
+  appID: string,
+  outPath: string,
+  config: MakerMSIXConfig
+): Promise<FileMapping> => {
+  const fileMapping: FileMapping = {}
+  const assetPath = path.join(outPath, "assets")
+  await fs.ensureDir(assetPath)
 
-  await fs.writeFile(manifestFilename, content)
+  return fileMapping
+}
+
+const makeAppManifest = async (
+  outPath: string,
+  config: MakerMSIXConfig
+): Promise<FileMapping> => {
+  await fs.ensureDir(outPath)
+
+  const outFilePath = path.join(outPath, "AppxManifest.xml")
+
+  return { "AppxManifest.xml": outFilePath }
+}
+
+const writeMappingFile = async (
+  fileMapping: FileMapping,
+  mappingFilename: string
+): Promise<void> => {
+  log(`Writing file mapping to ${fileMapping}`)
+  const contentLines = ["[Files]"]
+
+  for (const [inManifest, onDisk] of Object.entries(fileMapping)) {
+    contentLines.push(`"${onDisk}" "${inManifest}"`)
+  }
+
+  await fs.writeFile(mappingFilename, contentLines.join("\n"))
 }
 
 const makeMSIX = async (
@@ -104,7 +132,7 @@ const makeMSIX = async (
   const commandLine = `"${makeAppXPath}" pack /m "${appManifestPath}" /f ${fileMappingPath} /p "${outMSIX}"`
   log(`Running ${commandLine}`)
 
-  await exec(commandLine)
+  exec(commandLine)
   await codesign(config, outMSIX)
 }
 
@@ -117,6 +145,8 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
   }
 
   async make(options: MakerOptions): Promise<string[]> {
+    const appID = options.appName.toUpperCase().replace(/[^A-Z]/, "")
+
     // Copy out files to scratch directory for signing/packaging
     const scratchPath = path.join(options.makeDir, `scratch/`)
     await fs.ensureDir(scratchPath)
@@ -130,22 +160,32 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
     )
     await fs.ensureDir(outPath)
 
-    //
-    const fileMappingPath = path.join(outPath, "filemapping.txt")
-    const mainExe = await makeFileMappingAndFindMainExe(
-      options,
-      fileMappingPath,
-      scratchPath
+    // Find all the files to be installed
+    const installMapping = await inventoryInstallFilesForMapping(
+      scratchPath,
+      options
     )
-    if (!mainExe) {
-      log("Did not find an executable!")
-      throw new Error(
-        `No executable found for package in ${options.dir}, is this a packaged electron app?`
-      )
-    }
+
+    // Generate images for various tile sizes
+    const imageAssetMapping = await makeAppXImages(
+      appID,
+      options.makeDir,
+      this.config
+    )
 
     const appManifestPath = path.join(outPath, "appmanifest.xml")
-    await makeAppManifest(appManifestPath)
+    const appManifestMapping: FileMapping = await makeAppManifest(outPath)
+
+    // Write file mapping
+    // Combine all the files we need to install int oa single filemapping
+    const manifestMapping = Object.assign(
+      {},
+      appManifestMapping,
+      installMapping,
+      imageAssetMapping
+    )
+    const fileMappingPath = path.join(outPath, "filemapping.txt")
+    writeMappingFile(manifestMapping, fileMappingPath)
 
     const outMSIX = path.join(
       outPath,

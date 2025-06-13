@@ -12,6 +12,7 @@ import MSIXMaker from "./msixMaker"
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    icon: "assets/appicon.png",
   },
   rebuildConfig: {},
   makers: [
@@ -29,7 +30,7 @@ const config: ForgeConfig = {
       },
     },
     new MakerZIP({}),
-    new MSIXMaker({ makeAppXPath: "" }),
+    new MSIXMaker({ appIcon: "assets/appicon.png" }),
   ],
   plugins: [
     new AutoUnpackNativesPlugin({}),
