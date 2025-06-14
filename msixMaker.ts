@@ -1,13 +1,43 @@
 import { MakerBase, type MakerOptions } from "@electron-forge/maker-base"
 import type { ForgePlatform } from "@electron-forge/shared-types"
 import { sign, type SignOptions } from "@electron/windows-sign"
-import { exec } from "node:child_process"
+import { spawn } from "node:child_process"
 import debug from "debug"
 import fs from "fs-extra"
 import path from "node:path"
 import Sharp from "sharp"
 
 const log = debug("electron-forge:maker:msix")
+
+const run = async (executable: string, args: Array<string>) => {
+  return new Promise<string>((resolve, reject) => {
+    const proc = spawn(executable, args, {})
+    log(`Running ${JSON.stringify([executable].concat(args))}`)
+
+    let stdout = ""
+    proc.stdout.on("data", (data) => {
+      stdout += data
+    })
+
+    let stderr = ""
+    proc.stderr.on("data", (data) => {
+      stderr += data
+    })
+
+    proc.on("exit", (code) => {
+      stdout.split("\n").forEach((line) => log(`Stdout ${executable}: ${line}`))
+      if (code !== 0) {
+        stderr
+          .split("\n")
+          .forEach((line) => log(`Stderr ${executable}: ${line}`))
+        return reject(new Error(`Running ${executable} returned: ${code}.`))
+      }
+      return resolve(stdout)
+    })
+
+    proc.stdin.end()
+  })
+}
 
 export type MSIXCodesignOptions = Omit<SignOptions, "appDirectory">
 
@@ -27,10 +57,18 @@ const REQUIRED_APPX_SCALES: number[] = [100, 125, 150, 200, 400]
 
 export type MakerMSIXConfig = {
   appIcon: string
+  publisher?: string
   internalAppID?: string
   wallpaperIcon?: string
   makeAppXPath?: string
   codesign?: MSIXCodesignOptions
+  protocols?: string[]
+}
+
+export type MSIXAppManifestMetadata = {
+  appID: string
+  publisher: string
+  executable: string
   protocols?: string[]
 }
 
@@ -82,18 +120,27 @@ const codesign = async (config: MakerMSIXConfig, outPath: string) => {
 const inventoryInstallFilesForMapping = async (
   rootPath: string,
   options: MakerOptions
-): Promise<FileMapping> => {
+): Promise<[string, FileMapping]> => {
   const fileMapping: FileMapping = {}
 
+  let executable: string | undefined
   for await (const fileName of walk(rootPath)) {
     const relativeFileName: PathInManifest =
       `VFS\\UserProgramFiles\\${options.appName}\\` +
       fileName.substring(rootPath.length).replace(/^[\\/]+/, "")
 
+    if (!executable && relativeFileName.toLocaleLowerCase().endsWith(".exe")) {
+      executable = relativeFileName
+    }
+
     fileMapping[relativeFileName] = fileName
   }
 
-  return fileMapping
+  if (!executable) {
+    throw new Error(`No executable file found in ${rootPath}`)
+  }
+
+  return [executable, fileMapping]
 }
 
 const makeAppXImages = async (
@@ -140,13 +187,22 @@ const makeAppXImages = async (
 
 const makeAppManifest = async (
   outPath: string,
-  config: MakerMSIXConfig
-): Promise<FileMapping> => {
+  appID: string,
+  executable: string,
+  config: MakerMSIXConfig & Required<Pick<MakerMSIXConfig, "publisher">>
+): Promise<[string, FileMapping]> => {
   await fs.ensureDir(outPath)
 
   const outFilePath = path.join(outPath, "AppxManifest.xml")
 
-  return { "AppxManifest.xml": outFilePath }
+  const manifestData: MSIXAppManifestMetadata = {
+    appID,
+    executable,
+    publisher: config.publisher,
+    protocols: config.protocols,
+  }
+
+  return [outFilePath, { "AppxManifest.xml": outFilePath }]
 }
 
 const writeMappingFile = async (
@@ -173,10 +229,16 @@ const makeMSIX = async (
   const makeAppXPath =
     config.makeAppXPath ??
     "C:\\Program Files (x86)\\Windows Kits\\10\\App Certification Kit\\makeappx.exe"
-  const commandLine = `"${makeAppXPath}" pack /m "${appManifestPath}" /f ${fileMappingPath} /p "${outMSIX}"`
-  log(`Running ${commandLine}`)
 
-  exec(commandLine)
+  await run(makeAppXPath, [
+    "pack",
+    "/m",
+    appManifestPath,
+    "/f",
+    fileMappingPath,
+    "/p",
+    outMSIX,
+  ])
   await codesign(config, outMSIX)
 }
 
@@ -210,7 +272,7 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
     await fs.ensureDir(outPath)
 
     // Find all the files to be installed
-    const installMapping = await inventoryInstallFilesForMapping(
+    const [executable, installMapping] = await inventoryInstallFilesForMapping(
       scratchPath,
       options
     )
@@ -223,11 +285,20 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
     )
 
     // Actual AppxManifest.xml, the orchestration layer
-    const appManifestPath = path.join(outPath, "appmanifest.xml")
-    const appManifestMapping: FileMapping = await makeAppManifest(
-      outPath,
-      this.config
-    )
+
+    // Courtesy: if publisher is not set, pull from signatured exe
+    let publisher: string
+    if (this.config.publisher) {
+      publisher = this.config.publisher
+    } else {
+      publisher = ""
+    }
+
+    const [outManifestPath, appManifestMapping]: [string, FileMapping] =
+      await makeAppManifest(outPath, appID, executable, {
+        ...this.config,
+        publisher,
+      })
 
     // Write file mapping
     // Combine all the files we need to install into a single filemapping
@@ -244,7 +315,7 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
       outPath,
       `${options.appName} ${options.packageJSON.version} (${options.targetArch}).msix`
     )
-    await makeMSIX(appManifestPath, fileMappingPath, outMSIX, this.config)
+    await makeMSIX(outManifestPath, fileMappingPath, outMSIX, this.config)
 
     return [outMSIX]
   }
