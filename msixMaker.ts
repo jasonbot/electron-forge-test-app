@@ -1,7 +1,7 @@
 import { MakerBase, type MakerOptions } from "@electron-forge/maker-base"
 import type { ForgePlatform } from "@electron-forge/shared-types"
 import { sign, type SignOptions } from "@electron/windows-sign"
-import { exec } from "child_process"
+import { exec } from "node:child_process"
 import debug from "debug"
 import fs from "fs-extra"
 import path from "node:path"
@@ -27,6 +27,8 @@ const REQUIRED_APPX_SCALES: number[] = [100, 125, 150, 200, 400]
 
 export type MakerMSIXConfig = {
   appIcon: string
+  internalAppID?: string
+  wallpaperIcon?: string
   makeAppXPath?: string
   codesign?: MSIXCodesignOptions
   protocols?: string[]
@@ -100,7 +102,7 @@ const makeAppXImages = async (
   config: MakerMSIXConfig
 ): Promise<FileMapping> => {
   const fileMapping: FileMapping = {}
-  const assetPath = path.join(outPath, "assets")
+  const assetPath = path.join(outPath, "image-assets")
   await fs.ensureDir(assetPath)
   for (const scale of REQUIRED_APPX_SCALES) {
     const scaleMultiplier = scale / 100.0
@@ -112,9 +114,22 @@ const makeAppXImages = async (
       const pathinManifest = path.join("ASSETS", imageName)
 
       const image = Sharp(config.appIcon)
-      await image
-        .resize(w * scaleMultiplier, h * scaleMultiplier, { fit: "contain" })
-        .toFile(pathOnDisk)
+      // Small touch: superimpose the app icon on a background for banner-sized images
+      if ((h >= 300 || w >= 300) && config.wallpaperIcon) {
+        const bgimage = Sharp(config.wallpaperIcon).resize(w, h, {
+          fit: "contain",
+        })
+        const overlayicon = await image
+          .resize(w * 0.85, h * 0.85, { fit: "inside" })
+          .toBuffer()
+        await bgimage
+          .composite([{ input: overlayicon, gravity: "center" }])
+          .toFile(pathOnDisk)
+      } else {
+        await image
+          .resize(w * scaleMultiplier, h * scaleMultiplier, { fit: "contain" })
+          .toFile(pathOnDisk)
+      }
 
       fileMapping[pathinManifest] = pathOnDisk
     }
@@ -174,7 +189,12 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
   }
 
   async make(options: MakerOptions): Promise<string[]> {
-    const appID = options.appName.toUpperCase().replace(/[^A-Z]/, "")
+    const appID =
+      this.config.internalAppID ??
+      options.appName
+        .toUpperCase()
+        .replace(/[^A-Z]/, "")
+        .slice(0, 10)
 
     // Copy out files to scratch directory for signing/packaging
     const scratchPath = path.join(options.makeDir, `scratch/`)
@@ -202,11 +222,15 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
       this.config
     )
 
+    // Actual AppxManifest.xml, the orchestration layer
     const appManifestPath = path.join(outPath, "appmanifest.xml")
-    const appManifestMapping: FileMapping = await makeAppManifest(outPath)
+    const appManifestMapping: FileMapping = await makeAppManifest(
+      outPath,
+      this.config
+    )
 
     // Write file mapping
-    // Combine all the files we need to install int oa single filemapping
+    // Combine all the files we need to install into a single filemapping
     const manifestMapping = Object.assign(
       {},
       appManifestMapping,
