@@ -1,9 +1,9 @@
 import { MakerBase, type MakerOptions } from "@electron-forge/maker-base"
 import type { ForgePlatform } from "@electron-forge/shared-types"
 import { sign, type SignOptions } from "@electron/windows-sign"
-import { spawn } from "node:child_process"
 import debug from "debug"
 import fs from "fs-extra"
+import { spawn } from "node:child_process"
 import path from "node:path"
 import Sharp from "sharp"
 
@@ -45,13 +45,14 @@ type PathInManifest = string
 type PathOnDisk = string
 type FileMapping = Record<PathInManifest, PathOnDisk>
 
-type ImageDimensions = { h: number; w: number }
+type ImageDimensions = { h: number; w: number; specialName?: string }
 const REQUIRED_APPX_DIMENSIONS: ImageDimensions[] = [
   { w: 150, h: 150 },
   { w: 44, h: 44 },
   { w: 310, h: 150 },
   { w: 310, h: 310 },
   { w: 71, h: 71 },
+  { w: 50, h: 50, specialName: "StoreLogo" },
 ]
 const REQUIRED_APPX_SCALES: number[] = [100, 125, 150, 200, 400]
 
@@ -59,6 +60,7 @@ export type MakerMSIXConfig = {
   appIcon: string
   publisher?: string
   internalAppID?: string
+  appDescription?: string
   wallpaperIcon?: string
   makeAppXPath?: string
   codesign?: MSIXCodesignOptions
@@ -67,8 +69,12 @@ export type MakerMSIXConfig = {
 
 export type MSIXAppManifestMetadata = {
   appID: string
+  appName: string
+  appDescription: string
   publisher: string
+  version: string
   executable: string
+  architecture: string
   protocols?: string[]
 }
 
@@ -156,7 +162,8 @@ const makeAppXImages = async (
     for (const dimensions of REQUIRED_APPX_DIMENSIONS) {
       const { w, h } = dimensions
 
-      const imageName = `${appID}-${w}x${h}.scale-${scale}.png`
+      const baseName = dimensions.specialName ?? `${appID}-${w}x${h}`
+      const imageName = `${baseName}.scale-${scale}.png`
       const pathOnDisk = path.join(path.join(assetPath, imageName))
       const pathinManifest = path.join("ASSETS", imageName)
 
@@ -185,11 +192,87 @@ const makeAppXImages = async (
   return fileMapping
 }
 
+const makeAppManifestXML = ({
+  appID,
+  appName,
+  architecture,
+  appDescription,
+  executable,
+  publisher,
+  version,
+  protocols,
+}: MSIXAppManifestMetadata): string => {
+  let extensions = ""
+
+  if (protocols) {
+    for (const protocol of protocols) {
+      extensions += `<uap3:Extension Category="windows.protocol">
+                    <uap3:Protocol Name="${protocol}" Parameters="&quot;%1&quot;">
+                        <uap:DisplayName>${protocol}</uap:DisplayName>
+                    </uap3:Protocol>
+                </uap3:Extension>`
+    }
+  }
+
+  return `
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+    xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+    xmlns:desktop7="http://schemas.microsoft.com/appx/manifest/desktop/windows10/7"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap uap3 uap10 desktop7 rescap">
+    <Identity Name="${publisher}" Publisher="${
+    publisher.startsWith("CN=") ? publisher : `CN=${publisher}`
+  }" Version="${version}" ProcessorArchitecture="${architecture}" />
+    <Properties>
+        <DisplayName>${appName}</DisplayName>
+        <PublisherDisplayName>${appName}</PublisherDisplayName>
+        <Description>${appDescription}</Description>
+        <Logo>Assets\\StoreLogo.png</Logo>
+        <uap10:PackageIntegrity>
+            <uap10:Content Enforcement="on" />
+        </uap10:PackageIntegrity>
+    </Properties>
+    <Resources>
+        <Resource Language="en-us" />
+    </Resources>
+    <Dependencies>
+        <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0"
+            MaxVersionTested="10.0.22000.1" />
+        <PackageDependency Name="Microsoft.WindowsAppRuntime.1.4" MinVersion="4000.1010.1349.0"
+            Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+    </Dependencies>
+    <Capabilities>
+        <rescap:Capability Name="runFullTrust" />
+    </Capabilities>
+    <Applications>
+        <Application Id="${appID}" Executable="${executable}"
+            EntryPoint="Windows.FullTrustApplication">
+            <uap:VisualElements BackgroundColor="transparent" DisplayName="Notion"
+                Square150x150Logo="Assets\\${appID}-Square150x150Logo.png"
+                Square44x44Logo="Assets\\${appID}-Square44x44Logo.png" Description="Notion">
+                <uap:DefaultTile Wide310x150Logo="Assets\\${appID}-Wide310x150Logo.png"
+                    Square310x310Logo="Assets\\${appID}-Square310x310Logo.png"
+                    Square71x71Logo="Assets\\${appID}-Square71x71Logo.png" />
+            </uap:VisualElements>
+            <Extensions>
+                ${extensions}
+            </Extensions>
+        </Application>
+    </Applications>
+</Package>
+	`.trim()
+}
+
 const makeAppManifest = async (
   outPath: string,
   appID: string,
+  version: string,
   executable: string,
-  config: MakerMSIXConfig & Required<Pick<MakerMSIXConfig, "publisher">>
+  config: MakerMSIXConfig & Required<Pick<MakerMSIXConfig, "publisher">>,
+  options: MakerOptions
 ): Promise<[string, FileMapping]> => {
   await fs.ensureDir(outPath)
 
@@ -197,10 +280,22 @@ const makeAppManifest = async (
 
   const manifestData: MSIXAppManifestMetadata = {
     appID,
+    appName: options.appName,
+    appDescription: config.appDescription ?? options.appName,
     executable,
+    architecture: options.targetArch,
+    version: version
+      .split(".")
+      .concat(["0", "0", "0", "0"])
+      .slice(0, 4)
+      .join("."),
     publisher: config.publisher,
     protocols: config.protocols,
   }
+
+  const manifestXML = makeAppManifestXML(manifestData)
+
+  fs.writeFile(outFilePath, manifestXML)
 
   return [outFilePath, { "AppxManifest.xml": outFilePath }]
 }
@@ -295,10 +390,17 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
     }
 
     const [outManifestPath, appManifestMapping]: [string, FileMapping] =
-      await makeAppManifest(outPath, appID, executable, {
-        ...this.config,
-        publisher,
-      })
+      await makeAppManifest(
+        outPath,
+        appID,
+        options.packageJSON.version,
+        executable,
+        {
+          ...this.config,
+          publisher,
+        },
+        options
+      )
 
     // Write file mapping
     // Combine all the files we need to install into a single filemapping
