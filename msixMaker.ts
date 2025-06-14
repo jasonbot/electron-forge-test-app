@@ -5,6 +5,7 @@ import { exec } from "child_process"
 import debug from "debug"
 import fs from "fs-extra"
 import path from "node:path"
+import Sharp from "sharp"
 
 const log = debug("electron-forge:maker:msix")
 
@@ -13,6 +14,16 @@ export type MSIXCodesignOptions = Omit<SignOptions, "appDirectory">
 type PathInManifest = string
 type PathOnDisk = string
 type FileMapping = Record<PathInManifest, PathOnDisk>
+
+type ImageDimensions = { h: number; w: number }
+const REQUIRED_APPX_DIMENSIONS: ImageDimensions[] = [
+  { w: 150, h: 150 },
+  { w: 44, h: 44 },
+  { w: 310, h: 150 },
+  { w: 310, h: 310 },
+  { w: 71, h: 71 },
+]
+const REQUIRED_APPX_SCALES: number[] = [100, 125, 150, 200, 400]
 
 export type MakerMSIXConfig = {
   appIcon: string
@@ -91,6 +102,23 @@ const makeAppXImages = async (
   const fileMapping: FileMapping = {}
   const assetPath = path.join(outPath, "assets")
   await fs.ensureDir(assetPath)
+  for (const scale of REQUIRED_APPX_SCALES) {
+    const scaleMultiplier = scale / 100.0
+    for (const dimensions of REQUIRED_APPX_DIMENSIONS) {
+      const { w, h } = dimensions
+
+      const imageName = `${appID}-${w}x${h}.scale-${scale}.png`
+      const pathOnDisk = path.join(path.join(assetPath, imageName))
+      const pathinManifest = path.join("ASSETS", imageName)
+
+      const image = Sharp(config.appIcon)
+      await image
+        .resize(w * scaleMultiplier, h * scaleMultiplier, { fit: "contain" })
+        .toFile(pathOnDisk)
+
+      fileMapping[pathinManifest] = pathOnDisk
+    }
+  }
 
   return fileMapping
 }
@@ -117,7 +145,8 @@ const writeMappingFile = async (
     contentLines.push(`"${onDisk}" "${inManifest}"`)
   }
 
-  await fs.writeFile(mappingFilename, contentLines.join("\n"))
+  // Lol dos
+  await fs.writeFile(mappingFilename, contentLines.join("\r\n"))
 }
 
 const makeMSIX = async (
