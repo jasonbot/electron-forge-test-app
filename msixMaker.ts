@@ -19,6 +19,7 @@ export type MakerMSIXConfig = {
   sigCheckPath?: string
   codesign?: MSIXCodesignOptions
   protocols?: string[]
+  baseDownloadURL?: string
 }
 
 const log = debug("electron-forge:maker:msix")
@@ -114,6 +115,7 @@ export type MSIXAppManifestMetadata = {
   executable: string
   architecture: string
   protocols?: string[]
+  baseDownloadURL?: string
 }
 
 async function* walk(dir: string): AsyncGenerator<string> {
@@ -170,16 +172,15 @@ const codesign = async (config: MakerMSIXConfig, outPath: string) => {
 }
 
 const inventoryInstallFilesForMapping = async (
-  rootPath: string,
-  options: MakerOptions
+  rootPath: string
 ): Promise<[string, FileMapping]> => {
   const fileMapping: FileMapping = {}
 
   let executable: string | undefined
   for await (const fileName of walk(rootPath)) {
-    const relativeFileName: PathInManifest =
-      `VFS\\UserProgramFiles\\${options.appName}\\` +
-      fileName.substring(rootPath.length).replace(/^[\\/]+/, "")
+    const relativeFileName: PathInManifest = fileName
+      .substring(rootPath.length)
+      .replace(/^[\\/]+/, "")
 
     if (!executable && relativeFileName.toLocaleLowerCase().endsWith(".exe")) {
       executable = relativeFileName
@@ -227,7 +228,10 @@ const makeAppXImages = async (
           fit: "contain",
         })
         const overlayicon = await image
-          .resize(Math.trunc(w * 0.85), Math.trunc(h * 0.85), { fit: "inside" })
+          .resize(Math.trunc(w * 0.85), Math.trunc(h * 0.85), {
+            fit: "inside",
+            background: { r: 0, g: 0, b: 0, alpha: 1 },
+          })
           .toBuffer()
         await bgimage
           .composite([{ input: overlayicon, gravity: "center" }])
@@ -237,7 +241,7 @@ const makeAppXImages = async (
           .resize(
             Math.trunc(w * scaleMultiplier),
             Math.trunc(h * scaleMultiplier),
-            { fit: "contain" }
+            { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 1 } }
           )
           .toFile(pathOnDiskWithScale)
       }
@@ -366,19 +370,14 @@ const makeAppManifestXML = ({
 	`.trim()
 }
 
-const makeAppManifest = async (
-  outPath: string,
+const makeManifestConfiguration = (
   appID: string,
   version: string,
   executable: string,
   config: MakerMSIXConfig & Required<Pick<MakerMSIXConfig, "publisher">>,
   options: MakerOptions
-): Promise<FileMapping> => {
-  await fs.ensureDir(outPath)
-
-  const outFilePath = path.join(outPath, "AppxManifest.xml")
-
-  const manifestData: MSIXAppManifestMetadata = {
+): MSIXAppManifestMetadata => {
+  return {
     appID,
     appName: options.appName,
     appDescription: config.appDescription ?? options.appName,
@@ -391,13 +390,72 @@ const makeAppManifest = async (
       .join("."),
     publisher: config.publisher,
     protocols: config.protocols,
+    baseDownloadURL: config.baseDownloadURL,
   }
+}
 
-  const manifestXML = makeAppManifestXML(manifestData)
+const makeAppManifest = async (
+  outPath: string,
+  manifestConfig: MSIXAppManifestMetadata
+): Promise<FileMapping> => {
+  await fs.ensureDir(outPath)
+  const outFilePath = path.join(outPath, "AppxManifest.xml")
+  const manifestXML = makeAppManifestXML(manifestConfig)
 
   fs.writeFile(outFilePath, manifestXML)
 
   return { "AppxManifest.xml": outFilePath }
+}
+
+const makeAppInstallerXML = ({
+  appName,
+  publisher,
+  architecture,
+  version,
+  baseDownloadURL,
+}: MSIXAppManifestMetadata) => {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<AppInstaller
+    xmlns="http://schemas.microsoft.com/appx/appinstaller/2021"
+    Version="1.0.0.0"
+    Uri="http://mywebservice.azurewebsites.net/appset.appinstaller" >
+
+    <MainBundle
+        Name="${appName}"
+        Publisher="${
+          publisher.startsWith("CN=") ? publisher : `CN=${publisher}`
+        }"
+        Version="2.23.12.43"
+        Uri="${baseDownloadURL}/${appName}-${architecture}-${version}.msix" />
+
+    <UpdateSettings>
+        <OnLaunch 
+            HoursBetweenUpdateChecks="12" />
+    </UpdateSettings>
+
+    <RepairUris>
+        <RepairUri></RepairUri>
+        <RepairUri></RepairUri>
+    </RepairUris>
+
+</AppInstaller>`
+}
+
+const makeAppInstaller = async (
+  outPath: string,
+  manifestConfig: MSIXAppManifestMetadata
+): Promise<string | undefined> => {
+  await fs.ensureDir(outPath)
+  const outFilePath = path.join(
+    outPath,
+    `${manifestConfig.appName}.AppInstaller`
+  )
+
+  if (manifestConfig.baseDownloadURL) {
+    const outXML = makeAppInstallerXML(manifestConfig)
+    await fs.writeFile(outFilePath, outXML)
+    return outFilePath
+  }
 }
 
 const writeMappingFile = async (
@@ -424,9 +482,13 @@ const makeMSIX = async (
     config.makeAppXPath ??
     "C:\\Program Files (x86)\\Windows Kits\\10\\App Certification Kit\\makeappx.exe"
 
-  if ((await fs.stat(outMSIX)).isFile()) {
-    log(`${outMSIX} already exists; making new one`)
-    await fs.unlink(outMSIX)
+  try {
+    if ((await fs.stat(outMSIX)).isFile()) {
+      log(`${outMSIX} already exists; making new one`)
+      await fs.unlink(outMSIX)
+    }
+  } catch (e) {
+    log(`Error looking for existing ${outMSIX}: ${e}`)
   }
 
   await run(makeAppXPath, ["pack", "/f", fileMappingPath, "/p", outMSIX])
@@ -452,7 +514,16 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
     // Copy out files to scratch directory for signing/packaging
     const scratchPath = path.join(options.makeDir, "msix/build/")
 
-    const programFilesPath = path.join(scratchPath, "VFS\\UserProgramFiles")
+    if (await fs.pathExists(scratchPath)) {
+      await fs.remove(scratchPath)
+    }
+
+    const programFilesPath = path.join(
+      scratchPath,
+      "VFS",
+      "UserProgramFiles",
+      options.appName
+    )
     await fs.ensureDir(programFilesPath)
     await fs.copy(options.dir, programFilesPath)
     await codesign(this.config, programFilesPath)
@@ -466,8 +537,7 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
 
     // Find all the files to be installed
     const [executable, installMapping] = await inventoryInstallFilesForMapping(
-      scratchPath,
-      options
+      scratchPath
     )
 
     // Generate images for various tile sizes
@@ -479,7 +549,7 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
 
     // Actual AppxManifest.xml, the orchestration layer
 
-    // Courtesy: if publisher is not set, pull from signatured exe
+    // Courtesy: if publisher is not set, pull from signed exe
     let publisher: string
     if (this.config.publisher) {
       publisher = this.config.publisher
@@ -487,8 +557,7 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
       publisher = await getPublisher(installMapping, this.config)
     }
 
-    const appManifestMapping: FileMapping = await makeAppManifest(
-      scratchPath,
+    const manifestConfig = makeManifestConfiguration(
       appID,
       options.packageJSON.version,
       executable,
@@ -498,6 +567,13 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
       },
       options
     )
+
+    const appManifestMapping: FileMapping = await makeAppManifest(
+      scratchPath,
+      manifestConfig
+    )
+
+    const appInstallerPath = await makeAppInstaller(outPath, manifestConfig)
 
     const priFileMapping = makePRI(scratchPath, this.config)
 
@@ -515,10 +591,19 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
 
     const outMSIX = path.join(
       outPath,
-      `${options.appName} ${options.packageJSON.version} (${options.targetArch}).msix`
+      `${options.appName}-${options.targetArch}-${options.packageJSON.version}.msix`
     )
     await makeMSIX(fileMappingFilenameOnDisk, outMSIX, this.config)
 
-    return [outMSIX]
+    const latestMSIXPath = path.join(
+      outPath,
+      `${options.appName}-${options.targetArch}-${options.packageJSON.version}.msix`
+    )
+
+    await fs.copyFile(outMSIX, latestMSIXPath)
+
+    return [outMSIX, latestMSIXPath, appInstallerPath].filter(
+      (filename) => filename !== undefined
+    )
   }
 }
