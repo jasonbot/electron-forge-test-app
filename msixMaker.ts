@@ -417,7 +417,7 @@ const makeAppInstallerXML = ({
   const MSIXURL = `${baseDownloadURL?.replace(
     /\/+$/,
     ""
-  )}/${appName}-${architecture}-latest.msix`
+  )}/${appName}-${architecture}-${version}.msix`
 
   return `<?xml version="1.0" encoding="utf-8"?>
 <AppInstaller
@@ -434,7 +434,7 @@ const makeAppInstallerXML = ({
         Uri="${MSIXURL}" />
 
     <UpdateSettings>
-        <OnLaunch  HoursBetweenUpdateChecks="12" />
+        <OnLaunch HoursBetweenUpdateChecks="12" />
 	</UpdateSettings>
     <UpdateUris>
         <UpdateUri>${MSIXURL}</UpdateUri>
@@ -537,6 +537,9 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
       options.makeDir,
       `${options.appName}-${options.targetArch}-msix/`
     )
+    if (await fs.pathExists(outPath)) {
+      await fs.remove(outPath)
+    }
     await fs.ensureDir(outPath)
 
     // Find all the files to be installed
@@ -595,7 +598,7 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
 
     const outMSIX = path.join(
       outPath,
-      `${options.appName}-${options.targetArch}-${options.packageJSON.version}.msix`
+      `${options.appName}-${options.targetArch}-${manifestConfig.version}.msix`
     )
     await makeMSIX(fileMappingFilenameOnDisk, outMSIX, this.config)
 
