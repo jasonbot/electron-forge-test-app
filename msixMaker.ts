@@ -1,45 +1,95 @@
 import { MakerBase, type MakerOptions } from "@electron-forge/maker-base"
 import type { ForgePlatform } from "@electron-forge/shared-types"
 import { sign, type SignOptions } from "@electron/windows-sign"
+import type { HASHES } from "@electron/windows-sign/dist/cjs/types"
 import debug from "debug"
 import fs from "fs-extra"
 import { spawn } from "node:child_process"
 import path from "node:path"
 import Sharp from "sharp"
 
+export type MakerMSIXConfig = {
+  appIcon: string
+  publisher?: string
+  internalAppID?: string
+  appDescription?: string
+  wallpaperIcon?: string
+  makeAppXPath?: string
+  makePriPath?: string
+  sigCheckPath?: string
+  codesign?: MSIXCodesignOptions
+  protocols?: string[]
+}
+
 const log = debug("electron-forge:maker:msix")
 
-const run = async (executable: string, args: Array<string>) => {
+const run = async (
+  executable: string,
+  args: Array<string>,
+  neverFail = false
+) => {
   return new Promise<string>((resolve, reject) => {
     const proc = spawn(executable, args, {})
     log(`Running ${JSON.stringify([executable].concat(args))}`)
 
-    let stdout = ""
+    let runningStdout = ""
+    let runningStderr = ""
+
+    let collectedStdoutLogForReturn = ""
     proc.stdout.on("data", (data) => {
-      stdout += data
+      collectedStdoutLogForReturn += data
+      runningStdout += data
+
+      if (runningStdout.includes("\n")) {
+        const logLines = runningStdout.split("\n")
+        while (logLines.length > 1) {
+          log(`stdout: ${logLines.shift()?.trimEnd()}`)
+        }
+        if (logLines.length > 0) {
+          runningStdout = logLines[0]
+        }
+      }
     })
 
-    let stderr = ""
     proc.stderr.on("data", (data) => {
-      stderr += data
+      runningStderr += data
+
+      if (runningStderr.includes("\n")) {
+        const logLines = runningStderr.split("\n")
+        while (logLines.length > 1) {
+          log(`stderr: ${logLines.shift()?.trimEnd()}`)
+        }
+        if (logLines.length > 0) {
+          runningStderr = logLines[0]
+        }
+      }
     })
 
     proc.on("exit", (code) => {
-      stdout.split("\n").forEach((line) => log(`Stdout ${executable}: ${line}`))
+      runningStdout
+        .split("\n")
+        .forEach((line) => log(`stdout: ${line.trimEnd()}`))
+      runningStderr
+        .split("\n")
+        .forEach((line) => log(`stderr: ${line.trimEnd()}`))
       if (code !== 0) {
-        stderr
-          .split("\n")
-          .forEach((line) => log(`Stderr ${executable}: ${line}`))
-        return reject(new Error(`Running ${executable} returned: ${code}.`))
+        if (neverFail) {
+          log(`warning: ${executable} returned: ${code}`)
+        } else {
+          return reject(new Error(`Running ${executable} returned: ${code}.`))
+        }
       }
-      return resolve(stdout)
+      return resolve(collectedStdoutLogForReturn)
     })
 
     proc.stdin.end()
   })
 }
 
-export type MSIXCodesignOptions = Omit<SignOptions, "appDirectory">
+export type MSIXCodesignOptions = Omit<
+  Omit<SignOptions, "appDirectory">,
+  "hashes"
+>
 
 type PathInManifest = string
 type PathOnDisk = string
@@ -55,17 +105,6 @@ const REQUIRED_APPX_DIMENSIONS: ImageDimensions[] = [
   { w: 50, h: 50, specialName: "StoreLogo" },
 ]
 const REQUIRED_APPX_SCALES: number[] = [100, 125, 150, 200, 400]
-
-export type MakerMSIXConfig = {
-  appIcon: string
-  publisher?: string
-  internalAppID?: string
-  appDescription?: string
-  wallpaperIcon?: string
-  makeAppXPath?: string
-  codesign?: MSIXCodesignOptions
-  protocols?: string[]
-}
 
 export type MSIXAppManifestMetadata = {
   appID: string
@@ -94,10 +133,18 @@ const codesign = async (config: MakerMSIXConfig, outPath: string) => {
     try {
       if ((await fs.stat(outPath)).isDirectory()) {
         log(`Signing directory ${outPath}`)
-        await sign({ ...config.codesign, appDirectory: outPath })
+        await sign({
+          ...config.codesign,
+          appDirectory: outPath,
+          hashes: ["sha256" as HASHES],
+        })
       } else {
         log(`Signing file ${outPath}`)
-        await sign({ ...config.codesign, files: [outPath] })
+        await sign({
+          ...config.codesign,
+          files: [outPath],
+          hashes: ["sha256" as HASHES],
+        })
       }
     } catch (error) {
       console.error(
@@ -155,17 +202,24 @@ const makeAppXImages = async (
   config: MakerMSIXConfig
 ): Promise<FileMapping> => {
   const fileMapping: FileMapping = {}
-  const assetPath = path.join(outPath, "image-assets")
+  const assetPath = path.join(outPath, "ASSETS")
   await fs.ensureDir(assetPath)
   for (const scale of REQUIRED_APPX_SCALES) {
     const scaleMultiplier = scale / 100.0
     for (const dimensions of REQUIRED_APPX_DIMENSIONS) {
       const { w, h } = dimensions
 
-      const baseName = dimensions.specialName ?? `${appID}-${w}x${h}`
-      const imageName = `${baseName}.scale-${scale}.png`
-      const pathOnDisk = path.join(path.join(assetPath, imageName))
-      const pathinManifest = path.join("ASSETS", imageName)
+      const baseName = dimensions.specialName ?? `${appID}-${w}x${h}Logo`
+
+      const imageName = `${baseName}.png`
+      const pathinManifestWithoutScale = path.join("ASSETS", imageName)
+      const pathOnDiskWithoutScale = path.join(path.join(assetPath, imageName))
+
+      const imageNamewithScale = `${baseName}.scale-${scale}.png`
+      const pathOnDiskWithScale = path.join(
+        path.join(assetPath, imageNamewithScale)
+      )
+      const pathinManifestwithScale = path.join("ASSETS", imageNamewithScale)
 
       const image = Sharp(config.appIcon)
       // Small touch: superimpose the app icon on a background for banner-sized images
@@ -174,22 +228,69 @@ const makeAppXImages = async (
           fit: "contain",
         })
         const overlayicon = await image
-          .resize(w * 0.85, h * 0.85, { fit: "inside" })
+          .resize(Math.trunc(w * 0.85), Math.trunc(h * 0.85), { fit: "inside" })
           .toBuffer()
         await bgimage
           .composite([{ input: overlayicon, gravity: "center" }])
-          .toFile(pathOnDisk)
+          .toFile(pathOnDiskWithScale)
       } else {
         await image
-          .resize(w * scaleMultiplier, h * scaleMultiplier, { fit: "contain" })
-          .toFile(pathOnDisk)
+          .resize(
+            Math.trunc(w * scaleMultiplier),
+            Math.trunc(h * scaleMultiplier),
+            { fit: "contain" }
+          )
+          .toFile(pathOnDiskWithScale)
       }
 
-      fileMapping[pathinManifest] = pathOnDisk
+      if (scale === 100) {
+        await fs.copyFile(pathOnDiskWithScale, pathOnDiskWithoutScale)
+        fileMapping[pathinManifestWithoutScale] = pathOnDiskWithoutScale
+      }
+      fileMapping[pathinManifestwithScale] = pathOnDiskWithScale
     }
   }
 
   return fileMapping
+}
+
+const makePRI = async (
+  outPath: string,
+  config: MakerMSIXConfig
+): Promise<FileMapping> => {
+  const makePRIPath =
+    config.makePriPath ??
+    "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x86\\makepri.exe"
+
+  await run(makePRIPath, ["/pr", outPath])
+  return { "resources.pri": path.join(outPath, "resources.pri") }
+}
+
+const getPublisher = async (
+  installMapping: FileMapping,
+  config: MakerMSIXConfig
+): Promise<string> => {
+  const exes = Object.values(installMapping).filter((f) =>
+    f.toLowerCase().endsWith(".exe")
+  )
+  if (exes.length > 0) {
+    const stdout = await run(
+      config.sigCheckPath ?? "sigcheck.exe",
+      ["-accepteula", exes[0]],
+      true
+    )
+    const publisherRE = /\r\n[ \t]+Publisher:[ \t]+(?<publisher>.+?)\r\n/
+    const foundPublisher = stdout.match(publisherRE)?.groups?.publisher
+    if (foundPublisher) {
+      return foundPublisher
+    } else {
+      throw new Error(
+        `Could not determine publisher: ${exes[0]} is not signed.`
+      )
+    }
+  } else {
+    throw new Error("Could not determine publisher: nothing signed")
+  }
 }
 
 const makeAppManifestXML = ({
@@ -230,7 +331,7 @@ const makeAppManifestXML = ({
         <DisplayName>${appName}</DisplayName>
         <PublisherDisplayName>${appName}</PublisherDisplayName>
         <Description>${appDescription}</Description>
-        <Logo>Assets\\StoreLogo.png</Logo>
+        <Logo>ASSETS\\StoreLogo.png</Logo>
         <uap10:PackageIntegrity>
             <uap10:Content Enforcement="on" />
         </uap10:PackageIntegrity>
@@ -251,11 +352,11 @@ const makeAppManifestXML = ({
         <Application Id="${appID}" Executable="${executable}"
             EntryPoint="Windows.FullTrustApplication">
             <uap:VisualElements BackgroundColor="transparent" DisplayName="Notion"
-                Square150x150Logo="Assets\\${appID}-Square150x150Logo.png"
-                Square44x44Logo="Assets\\${appID}-Square44x44Logo.png" Description="Notion">
-                <uap:DefaultTile Wide310x150Logo="Assets\\${appID}-Wide310x150Logo.png"
-                    Square310x310Logo="Assets\\${appID}-Square310x310Logo.png"
-                    Square71x71Logo="Assets\\${appID}-Square71x71Logo.png" />
+                Square150x150Logo="ASSETS\\${appID}-150x150Logo.png"
+                Square44x44Logo="ASSETS\\${appID}-44x44Logo.png" Description="Notion">
+                <uap:DefaultTile Wide310x150Logo="ASSETS\\${appID}-310x150Logo.png"
+                    Square310x310Logo="ASSETS\\${appID}-310x310Logo.png"
+                    Square71x71Logo="ASSETS\\${appID}-71x71Logo.png" />
             </uap:VisualElements>
             <Extensions>
                 ${extensions}
@@ -273,7 +374,7 @@ const makeAppManifest = async (
   executable: string,
   config: MakerMSIXConfig & Required<Pick<MakerMSIXConfig, "publisher">>,
   options: MakerOptions
-): Promise<[string, FileMapping]> => {
+): Promise<FileMapping> => {
   await fs.ensureDir(outPath)
 
   const outFilePath = path.join(outPath, "AppxManifest.xml")
@@ -297,7 +398,7 @@ const makeAppManifest = async (
 
   fs.writeFile(outFilePath, manifestXML)
 
-  return [outFilePath, { "AppxManifest.xml": outFilePath }]
+  return { "AppxManifest.xml": outFilePath }
 }
 
 const writeMappingFile = async (
@@ -316,7 +417,6 @@ const writeMappingFile = async (
 }
 
 const makeMSIX = async (
-  appManifestPath: string,
   fileMappingPath: string,
   outMSIX: string,
   config: MakerMSIXConfig
@@ -325,15 +425,12 @@ const makeMSIX = async (
     config.makeAppXPath ??
     "C:\\Program Files (x86)\\Windows Kits\\10\\App Certification Kit\\makeappx.exe"
 
-  await run(makeAppXPath, [
-    "pack",
-    "/m",
-    appManifestPath,
-    "/f",
-    fileMappingPath,
-    "/p",
-    outMSIX,
-  ])
+  if ((await fs.stat(outMSIX)).isFile()) {
+    log(`${outMSIX} already exists; making new one`)
+    await fs.unlink(outMSIX)
+  }
+
+  await run(makeAppXPath, ["pack", "/f", fileMappingPath, "/p", outMSIX])
   await codesign(config, outMSIX)
 }
 
@@ -354,10 +451,12 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
         .slice(0, 10)
 
     // Copy out files to scratch directory for signing/packaging
-    const scratchPath = path.join(options.makeDir, `scratch/`)
-    await fs.ensureDir(scratchPath)
-    await fs.copy(options.dir, scratchPath)
-    await codesign(this.config, scratchPath)
+    const scratchPath = path.join(options.makeDir, "msix/build/")
+
+    const programFilesPath = path.join(scratchPath, "VFS\\UserProgramFiles")
+    await fs.ensureDir(programFilesPath)
+    await fs.copy(options.dir, programFilesPath)
+    await codesign(this.config, programFilesPath)
 
     // Make sure the build dir exists
     const outPath = path.join(
@@ -375,7 +474,7 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
     // Generate images for various tile sizes
     const imageAssetMapping = await makeAppXImages(
       appID,
-      options.makeDir,
+      scratchPath,
       this.config
     )
 
@@ -386,21 +485,22 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
     if (this.config.publisher) {
       publisher = this.config.publisher
     } else {
-      publisher = ""
+      publisher = await getPublisher(installMapping, this.config)
     }
 
-    const [outManifestPath, appManifestMapping]: [string, FileMapping] =
-      await makeAppManifest(
-        outPath,
-        appID,
-        options.packageJSON.version,
-        executable,
-        {
-          ...this.config,
-          publisher,
-        },
-        options
-      )
+    const appManifestMapping: FileMapping = await makeAppManifest(
+      scratchPath,
+      appID,
+      options.packageJSON.version,
+      executable,
+      {
+        ...this.config,
+        publisher,
+      },
+      options
+    )
+
+    const priFileMapping = makePRI(scratchPath, this.config)
 
     // Write file mapping
     // Combine all the files we need to install into a single filemapping
@@ -408,16 +508,17 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
       {},
       appManifestMapping,
       installMapping,
-      imageAssetMapping
+      imageAssetMapping,
+      priFileMapping
     )
-    const fileMappingPath = path.join(outPath, "filemapping.txt")
-    writeMappingFile(manifestMapping, fileMappingPath)
+    const fileMappingFilenameOnDisk = path.join(scratchPath, "filemapping.txt")
+    writeMappingFile(manifestMapping, fileMappingFilenameOnDisk)
 
     const outMSIX = path.join(
       outPath,
       `${options.appName} ${options.packageJSON.version} (${options.targetArch}).msix`
     )
-    await makeMSIX(outManifestPath, fileMappingPath, outMSIX, this.config)
+    await makeMSIX(fileMappingFilenameOnDisk, outMSIX, this.config)
 
     return [outMSIX]
   }
