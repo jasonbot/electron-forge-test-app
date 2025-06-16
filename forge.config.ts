@@ -35,6 +35,7 @@ const config: ForgeConfig = {
       codesign: {
         certificateFile: "c:\\Users\\JasonScheirer\\certificate.pfx",
       },
+      baseDownloadURL: "https://jasonscheirer.com/apps/",
     }),
   ],
   plugins: [

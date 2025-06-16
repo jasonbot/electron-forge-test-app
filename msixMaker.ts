@@ -414,6 +414,11 @@ const makeAppInstallerXML = ({
   version,
   baseDownloadURL,
 }: MSIXAppManifestMetadata) => {
+  const MSIXURL = `${baseDownloadURL?.replace(
+    /\/+$/,
+    ""
+  )}/${appName}-${architecture}-latest.msix`
+
   return `<?xml version="1.0" encoding="utf-8"?>
 <AppInstaller
     xmlns="http://schemas.microsoft.com/appx/appinstaller/2021"
@@ -425,19 +430,18 @@ const makeAppInstallerXML = ({
         Publisher="${
           publisher.startsWith("CN=") ? publisher : `CN=${publisher}`
         }"
-        Version="2.23.12.43"
-        Uri="${baseDownloadURL}/${appName}-${architecture}-${version}.msix" />
+        Version="${version}"
+        Uri="${MSIXURL}" />
 
     <UpdateSettings>
-        <OnLaunch 
-            HoursBetweenUpdateChecks="12" />
-    </UpdateSettings>
-
+        <OnLaunch  HoursBetweenUpdateChecks="12" />
+	</UpdateSettings>
+    <UpdateUris>
+        <UpdateUri>${MSIXURL}</UpdateUri>
+    </UpdateUris>
     <RepairUris>
-        <RepairUri></RepairUri>
-        <RepairUri></RepairUri>
+        <RepairUri>${MSIXURL}</RepairUri>
     </RepairUris>
-
 </AppInstaller>`
 }
 
@@ -597,7 +601,7 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
 
     const latestMSIXPath = path.join(
       outPath,
-      `${options.appName}-${options.targetArch}-${options.packageJSON.version}.msix`
+      `${options.appName}-${options.targetArch}-latest.msix`
     )
 
     await fs.copyFile(outMSIX, latestMSIXPath)
