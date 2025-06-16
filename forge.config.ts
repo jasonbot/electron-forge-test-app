@@ -1,13 +1,13 @@
-import { FuseV1Options, FuseVersion } from "@electron/fuses"
 import { MakerZIP } from "@electron-forge/maker-zip"
 import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives"
 import { FusesPlugin } from "@electron-forge/plugin-fuses"
 import { WebpackPlugin } from "@electron-forge/plugin-webpack"
 import type { ForgeConfig } from "@electron-forge/shared-types"
+import { FuseV1Options, FuseVersion } from "@electron/fuses"
 
+import MSIXMaker from "./msixMaker"
 import { mainConfig } from "./webpack.main.config"
 import { rendererConfig } from "./webpack.renderer.config"
-import MSIXMaker from "./msixMaker"
 
 const config: ForgeConfig = {
   packagerConfig: {
@@ -30,7 +30,12 @@ const config: ForgeConfig = {
       },
     },
     new MakerZIP({}),
-    new MSIXMaker({ appIcon: "assets/appicon.png" }),
+    new MSIXMaker({
+      appIcon: "assets/appicon.png",
+      codesign: {
+        certificateFile: "c:\\Users\\JasonScheirer\\certificate.pfx",
+      },
+    }),
   ],
   plugins: [
     new AutoUnpackNativesPlugin({}),
