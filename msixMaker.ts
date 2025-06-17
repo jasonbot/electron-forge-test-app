@@ -231,7 +231,7 @@ const makeAppXImages = async (
         const overlayicon = await image
           .resize(Math.trunc(w * 0.85), Math.trunc(h * 0.85), {
             fit: "inside",
-            background: { r: 0, g: 0, b: 0, alpha: 1 },
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
           })
           .toBuffer()
         await bgimage
@@ -242,7 +242,7 @@ const makeAppXImages = async (
           .resize(
             Math.trunc(w * scaleMultiplier),
             Math.trunc(h * scaleMultiplier),
-            { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 1 } }
+            { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }
           )
           .toFile(pathOnDiskWithScale)
       }
