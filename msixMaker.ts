@@ -301,14 +301,12 @@ const makePRI = async (
     outPriPath,
   ])
 
-  const priArray: string[] = []
+  const fileMapping: FileMapping = {}
   for await (const item of await glob(path.join(outPath, "*.pri"))) {
-    priArray.push(item)
+    fileMapping[path.basename(item)] = item
   }
 
-  return Object.fromEntries(
-    priArray.map((fullPath) => [path.basename(fullPath), fullPath])
-  )
+  return fileMapping
 }
 
 const writeContentTypeXML = async (outPath): Promise<FileMapping> => {
@@ -630,9 +628,6 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
       options.makeDir,
       `${options.appName}-${options.targetArch}-msix/`
     )
-    if (await fs.pathExists(outPath)) {
-      await fs.remove(outPath)
-    }
     await fs.ensureDir(outPath)
 
     // Find all the files to be installed
