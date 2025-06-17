@@ -5,6 +5,7 @@ import type { HASHES } from "@electron/windows-sign/dist/cjs/types"
 import debug from "debug"
 import fs from "fs-extra"
 import { spawn } from "node:child_process"
+import { glob } from "node:fs/promises"
 import path from "node:path"
 import Sharp from "sharp"
 
@@ -202,7 +203,7 @@ const makeAppXImages = async (
   config: MakerMSIXConfig
 ): Promise<FileMapping> => {
   const fileMapping: FileMapping = {}
-  const assetPath = path.join(outPath, "ASSETS")
+  const assetPath = path.join(outPath, "assets")
   await fs.ensureDir(assetPath)
   for (const scale of REQUIRED_APPX_SCALES) {
     const scaleMultiplier = scale / 100.0
@@ -212,14 +213,14 @@ const makeAppXImages = async (
       const baseName = dimensions.specialName ?? `${appID}-${w}x${h}Logo`
 
       const imageName = `${baseName}.png`
-      const pathinManifestWithoutScale = path.join("ASSETS", imageName)
+      const pathinManifestWithoutScale = path.join("assets", imageName)
       const pathOnDiskWithoutScale = path.join(path.join(assetPath, imageName))
 
       const imageNamewithScale = `${baseName}.scale-${scale}.png`
       const pathOnDiskWithScale = path.join(
         path.join(assetPath, imageNamewithScale)
       )
-      const pathinManifestwithScale = path.join("ASSETS", imageNamewithScale)
+      const pathinManifestwithScale = path.join("assets", imageNamewithScale)
 
       const image = Sharp(config.appIcon)
       // Small touch: superimpose the app icon on a background for banner-sized images
@@ -265,8 +266,36 @@ const makePRI = async (
     config.makePriPath ??
     "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x86\\makepri.exe"
 
-  await run(makePRIPath, ["/pr", outPath])
-  return { "resources.pri": path.join(outPath, "resources.pri") }
+  const outPriPath = path.join(outPath, "resources.pri")
+  const priConfigPath = path.join(outPath, "priconfig.xml")
+
+  await run(makePRIPath, [
+    "createconfig",
+    "/cf",
+    priConfigPath,
+    "/dq",
+    "en-US",
+    "/pv",
+    "10.0.0",
+  ])
+  await run(makePRIPath, [
+    "new",
+    "/cf",
+    priConfigPath,
+    "/pr",
+    outPath,
+    "/of",
+    outPriPath,
+  ])
+
+  const priArray: string[] = []
+  for await (const item of await glob(path.join(outPath, "*.pri"))) {
+    priArray.push(item)
+  }
+
+  return Object.fromEntries(
+    priArray.map((fullPath) => [path.basename(fullPath), fullPath])
+  )
 }
 
 const getPublisher = async (
@@ -306,7 +335,24 @@ const makeAppManifestXML = ({
   version,
   protocols,
 }: MSIXAppManifestMetadata): string => {
-  let extensions = ""
+  let extensions = `
+        <desktop:Extension
+          Category="windows.startupTask"
+          Executable="${executable}"
+          EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="SlackStartup" Enabled="true" DisplayName="${appName}" />
+        </desktop:Extension>
+        <uap3:Extension
+          Category="windows.appExecutionAlias"
+          Executable="${executable}"
+          EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="${executable
+              .split(/[/\\]/)
+              .pop()}" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+`
 
   if (protocols) {
     for (const protocol of protocols) {
@@ -314,7 +360,8 @@ const makeAppManifestXML = ({
                     <uap3:Protocol Name="${protocol}" Parameters="&quot;%1&quot;">
                         <uap:DisplayName>${protocol}</uap:DisplayName>
                     </uap3:Protocol>
-                </uap3:Extension>`
+                </uap3:Extension>
+`
     }
   }
 
@@ -324,6 +371,8 @@ const makeAppManifestXML = ({
     xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
     xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
     xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+	xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+    xmlns:desktop2="http://schemas.microsoft.com/appx/manifest/desktop/windows10/2"
     xmlns:desktop7="http://schemas.microsoft.com/appx/manifest/desktop/windows10/7"
     xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
     IgnorableNamespaces="uap uap3 uap10 desktop7 rescap">
@@ -334,7 +383,7 @@ const makeAppManifestXML = ({
         <DisplayName>${appName}</DisplayName>
         <PublisherDisplayName>${appName}</PublisherDisplayName>
         <Description>${appDescription}</Description>
-        <Logo>ASSETS\\StoreLogo.png</Logo>
+        <Logo>assets\\StoreLogo.png</Logo>
         <uap10:PackageIntegrity>
             <uap10:Content Enforcement="on" />
         </uap10:PackageIntegrity>
@@ -342,30 +391,36 @@ const makeAppManifestXML = ({
     <Resources>
         <Resource Language="en-us" />
     </Resources>
-    <Dependencies>
-        <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0"
-            MaxVersionTested="10.0.22000.1" />
-        <PackageDependency Name="Microsoft.WindowsAppRuntime.1.4" MinVersion="4000.1010.1349.0"
-            Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
-    </Dependencies>
-    <Capabilities>
-        <rescap:Capability Name="runFullTrust" />
-    </Capabilities>
+	<Dependencies>
+		<TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.17763.0" />
+	</Dependencies>
+	<Capabilities>
+		<rescap:Capability Name="runFullTrust" />
+		<Capability Name="internetClient" />
+	</Capabilities>
     <Applications>
         <Application Id="${appID}" Executable="${executable}"
             EntryPoint="Windows.FullTrustApplication">
             <uap:VisualElements BackgroundColor="transparent" DisplayName="Notion"
-                Square150x150Logo="ASSETS\\${appID}-150x150Logo.png"
-                Square44x44Logo="ASSETS\\${appID}-44x44Logo.png" Description="Notion">
-                <uap:DefaultTile Wide310x150Logo="ASSETS\\${appID}-310x150Logo.png"
-                    Square310x310Logo="ASSETS\\${appID}-310x310Logo.png"
-                    Square71x71Logo="ASSETS\\${appID}-71x71Logo.png" />
+                Square150x150Logo="assets\\${appID}-150x150Logo.png"
+                Square44x44Logo="assets\\${appID}-44x44Logo.png" Description="Notion">
+                <uap:DefaultTile Wide310x150Logo="assets\\${appID}-310x150Logo.png"
+                    Square310x310Logo="assets\\${appID}-310x310Logo.png"
+                    Square71x71Logo="assets\\${appID}-71x71Logo.png" />
             </uap:VisualElements>
             <Extensions>
                 ${extensions}
             </Extensions>
         </Application>
     </Applications>
+	<Extensions>
+		<desktop2:Extension Category="windows.firewallRules">
+			<desktop2:FirewallRules Executable="${executable}">
+				<desktop2:Rule Direction="in" IPProtocol="TCP" Profile="all"/>
+				<desktop2:Rule Direction="out" IPProtocol="TCP" Profile="all"/>
+			</desktop2:FirewallRules>
+		</desktop2:Extension>
+	</Extensions>
 </Package>
 	`.trim()
 }
@@ -522,12 +577,7 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
       await fs.remove(scratchPath)
     }
 
-    const programFilesPath = path.join(
-      scratchPath,
-      "VFS",
-      "UserProgramFiles",
-      options.appName
-    )
+    const programFilesPath = path.join(scratchPath, options.appName)
     await fs.ensureDir(programFilesPath)
     await fs.copy(options.dir, programFilesPath)
     await codesign(this.config, programFilesPath)
@@ -582,7 +632,7 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
 
     const appInstallerPath = await makeAppInstaller(outPath, manifestConfig)
 
-    const priFileMapping = makePRI(scratchPath, this.config)
+    const priFileMapping = await makePRI(scratchPath, this.config)
 
     // Write file mapping
     // Combine all the files we need to install into a single filemapping
