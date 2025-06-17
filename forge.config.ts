@@ -32,6 +32,7 @@ const config: ForgeConfig = {
     new MakerZIP({}),
     new MSIXMaker({
       appIcon: "assets/appicon.png",
+      wallpaperIcon: "assets/wallpaper.png",
       codesign: {
         certificateFile: "c:\\Users\\JasonScheirer\\certificate.pfx",
       },
