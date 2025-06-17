@@ -537,7 +537,7 @@ const makeAppInstaller = async (
   await fs.ensureDir(outPath)
   const outFilePath = path.join(
     outPath,
-    `${manifestConfig.appName}.AppInstaller`
+    `${manifestConfig.appName}-${manifestConfig.architecture}.AppInstaller`
   )
 
   if (manifestConfig.baseDownloadURL) {
