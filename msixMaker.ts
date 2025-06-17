@@ -224,7 +224,7 @@ const makeAppXImages = async (
 
       const image = Sharp(config.appIcon)
       // Small touch: superimpose the app icon on a background for banner-sized images
-      if ((h >= 300 || w >= 300) && config.wallpaperIcon) {
+      if ((h > 300 || w > 300) && config.wallpaperIcon) {
         const bgimage = Sharp(config.wallpaperIcon).resize(w, h, {
           fit: "cover",
           background: { r: 0, g: 0, b: 0, alpha: 0 },
