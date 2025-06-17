@@ -298,6 +298,36 @@ const makePRI = async (
   )
 }
 
+const writeContentTypeXML = async (outPath): Promise<FileMapping> => {
+  const fileName = "[Content_Types].xml"
+  const outFileName = path.join(outPath, fileName)
+  const co = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+    <Default Extension="mp3" ContentType="audio/mpeg" />
+    <Default Extension="png" ContentType="image/png" />
+    <Default Extension="ico" ContentType="image/vnd.microsoft.icon" />
+    <Default Extension="dll" ContentType="application/x-msdownload" />
+    <Default Extension="pak" ContentType="application/octet-stream" />
+    <Default Extension="bin" ContentType="application/octet-stream" />
+    <Default Extension="dat" ContentType="application/octet-stream" />
+    <Default Extension="html" ContentType="text/html" />
+    <Default Extension="json" ContentType="application/json" />
+    <Default Extension="xml" ContentType="text/xml" />
+    <Default Extension="asar" ContentType="application/octet-stream" />
+    <Default Extension="node" ContentType="application/octet-stream" />
+    <Default Extension="exe" ContentType="application/x-msdownload" />
+    <Default Extension="pri" ContentType="application/octet-stream" />
+    <Override PartName="/AppxManifest.xml" ContentType="application/vnd.ms-appx.manifest+xml" />
+    <Override PartName="/AppxBlockMap.xml" ContentType="application/vnd.ms-appx.blockmap+xml" />
+    <Override PartName="/AppxSignature.p7x" ContentType="application/vnd.ms-appx.signature" />
+    <Override PartName="/AppxMetadata/CodeIntegrity.cat" ContentType="application/vnd.ms-pkiseccat" />
+</Types>`
+
+  await fs.writeFile(outFileName, co)
+
+  return { fileName: outFileName }
+}
+
 const getPublisher = async (
   installMapping: FileMapping,
   config: MakerMSIXConfig
@@ -533,7 +563,7 @@ const writeMappingFile = async (
 }
 
 const makeMSIX = async (
-  fileMappingPath: string,
+  scratchPath: string,
   outMSIX: string,
   config: MakerMSIXConfig
 ) => {
@@ -550,7 +580,7 @@ const makeMSIX = async (
     log(`Error looking for existing ${outMSIX}: ${e}`)
   }
 
-  await run(makeAppXPath, ["pack", "/f", fileMappingPath, "/p", outMSIX])
+  await run(makeAppXPath, ["pack", "/d", scratchPath, "/p", outMSIX])
   await codesign(config, outMSIX)
 }
 
@@ -634,6 +664,8 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
 
     const priFileMapping = await makePRI(scratchPath, this.config)
 
+    const contentTypeFileMapping = await writeContentTypeXML(scratchPath)
+
     // Write file mapping
     // Combine all the files we need to install into a single filemapping
     const manifestMapping = Object.assign(
@@ -641,16 +673,17 @@ export default class MakerMSIX extends MakerBase<MakerMSIXConfig> {
       appManifestMapping,
       installMapping,
       imageAssetMapping,
-      priFileMapping
+      priFileMapping,
+      contentTypeFileMapping
     )
-    const fileMappingFilenameOnDisk = path.join(scratchPath, "filemapping.txt")
+    const fileMappingFilenameOnDisk = path.join(outPath, "filemapping.txt")
     writeMappingFile(manifestMapping, fileMappingFilenameOnDisk)
 
     const outMSIX = path.join(
       outPath,
       `${options.appName}-${options.targetArch}-${manifestConfig.version}.msix`
     )
-    await makeMSIX(fileMappingFilenameOnDisk, outMSIX, this.config)
+    await makeMSIX(scratchPath, outMSIX, this.config)
 
     const latestMSIXPath = path.join(
       outPath,
