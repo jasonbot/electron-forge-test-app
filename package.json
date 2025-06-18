@@ -28,7 +28,7 @@
 		"@electron-forge/plugin-webpack": "^7.8.1",
 		"@electron/fuses": "^1.8.0",
 		"@felixrieseberg/electron-forge-maker-nsis": "^7.2.0",
-		"@jasonscheirer/electron-forge-maker-msix": "^0.2.0",
+		"@jasonscheirer/electron-forge-maker-msix": "^0.3.0",
 		"@typescript-eslint/eslint-plugin": "^5.62.0",
 		"@typescript-eslint/parser": "^5.62.0",
 		"@vercel/webpack-asset-relocator-loader": "^1.7.3",
