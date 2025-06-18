@@ -7,14 +7,11 @@ import { FuseV1Options, FuseVersion } from "@electron/fuses"
 import { mainConfig } from "./webpack.main.config"
 import { rendererConfig } from "./webpack.renderer.config"
 
-import maker from "@jasonscheirer/electron-forge-maker-msix"
-
-console.log("MAKER", maker)
-
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
     icon: "assets/appicon.png",
+    protocols: [{ name: "App Scheme", schemes: ["my-app"] }],
   },
   rebuildConfig: {},
   makers: [
