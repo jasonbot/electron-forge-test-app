@@ -23,7 +23,7 @@ const config: ForgeConfig = {
       config: {
         getAppBuilderConfig: () => {
           return {
-            artifactName: "setup.exe",
+            artifactName: "Ma App Installer Setup.exe",
             win: {
               forceCodeSigning: false,
             },
