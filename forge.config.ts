@@ -31,6 +31,7 @@ const config: ForgeConfig = {
     {
       name: "@jasonscheirer/electron-forge-maker-msix",
       config: {
+        internalAppID: "com.jasonscheirer.myapp",
         appIcon: "assets/appicon.png",
         wallpaperIcon: "assets/wallpaper.png",
         codesign: {
