@@ -3,9 +3,27 @@ import { FusesPlugin } from "@electron-forge/plugin-fuses"
 import { WebpackPlugin } from "@electron-forge/plugin-webpack"
 import type { ForgeConfig } from "@electron-forge/shared-types"
 import { FuseV1Options, FuseVersion } from "@electron/fuses"
+import { MakerMSIXConfig } from "./electron-forge-maker-msix/dist/cjs/types"
 
 import { mainConfig } from "./webpack.main.config"
 import { rendererConfig } from "./webpack.renderer.config"
+
+const msixConfig: MakerMSIXConfig = {
+  internalAppID: "com.jasonscheirer.myapp",
+  appIcon: "assets/appicon.png",
+  wallpaperIcon: "assets/wallpaper.png",
+  codesign: {
+    certificateFile: "c:\\Users\\JasonScheirer\\certificate.pfx",
+  },
+  appCapabilities: ["Microphone"],
+  baseDownloadURL: "https://jasonscheirer.com/apps/",
+  embedAppInstaller: true,
+  copilotKey: {
+    tap: { url: "my-app://hotkey?tap" },
+    start: { url: "my-app://hotkey?start" },
+    stop: { url: "my-app://hotkey?stop" },
+  },
+}
 
 const config: ForgeConfig = {
   packagerConfig: {
@@ -30,15 +48,7 @@ const config: ForgeConfig = {
     },
     {
       name: "@jasonscheirer/electron-forge-maker-msix",
-      config: {
-        internalAppID: "com.jasonscheirer.myapp",
-        appIcon: "assets/appicon.png",
-        wallpaperIcon: "assets/wallpaper.png",
-        codesign: {
-          certificateFile: "c:\\Users\\JasonScheirer\\certificate.pfx",
-        },
-        baseDownloadURL: "https://jasonscheirer.com/apps/",
-      },
+      config: msixConfig,
     },
   ],
   plugins: [
