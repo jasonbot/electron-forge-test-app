@@ -1,0 +1,3 @@
+[submodule "electron-forge-maker-msix"]
+	path = electron-forge-maker-msix
+	url = git@github.com:jasonbot/electron-forge-maker-msix.git
