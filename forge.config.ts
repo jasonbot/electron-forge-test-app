@@ -17,12 +17,13 @@ const msixConfig: MakerMSIXConfig = {
   },
   appCapabilities: ["Microphone"],
   baseDownloadURL: "https://jasonscheirer.com/apps/",
-  embedAppInstaller: true,
   copilotKey: {
     tap: { url: "my-app://hotkey?tap" },
     start: { url: "my-app://hotkey?start" },
     stop: { url: "my-app://hotkey?stop" },
   },
+  runAtStartup: true,
+  startupParams: "--hello",
 }
 
 const config: ForgeConfig = {
