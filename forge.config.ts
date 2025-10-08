@@ -17,13 +17,21 @@ const msixConfig: MakerMSIXConfig = {
   },
   appCapabilities: ["Microphone"],
   baseDownloadURL: "https://jasonscheirer.com/apps/",
+  makeAppInstaller: true,
   copilotKey: {
     tap: { url: "my-app://hotkey?tap" },
     start: { url: "my-app://hotkey?start" },
     stop: { url: "my-app://hotkey?stop" },
   },
+  appURIHandlers: ["jasonscheirer.com"],
   runAtStartup: true,
   startupParams: "--hello",
+  updater: {
+    url: "https://jasonscheirer.com/my-app",
+    channel: "bingus",
+    publisherName: "Publisher McGee",
+    updaterCacheDirName: "my-app-updater",
+  },
 }
 
 const config: ForgeConfig = {
@@ -39,7 +47,7 @@ const config: ForgeConfig = {
       config: {
         getAppBuilderConfig: () => {
           return {
-            artifactName: "Ma App Installer Setup.exe",
+            artifactName: "My App Installer Setup.exe",
             win: {
               forceCodeSigning: false,
             },
