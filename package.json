@@ -45,6 +45,7 @@
 	},
 	"dependencies": {
 		"@electron/windows-sign": "^1.2.2",
+		"babel-runtime": "^6.26.0",
 		"electron-squirrel-startup": "^1.0.1",
 		"sharp": "^0.34.2"
 	}
