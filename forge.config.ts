@@ -12,9 +12,11 @@ const msixConfig: MakerMSIXConfig = {
   internalAppID: "com.jasonscheirer.myapp",
   appIcon: "assets/appicon.png",
   wallpaperIcon: "assets/wallpaper.png",
+  /*
   codesign: {
     certificateFile: "c:\\Users\\JasonScheirer\\certificate.pfx",
   },
+   */
   appCapabilities: ["Microphone"],
   baseDownloadURL: "https://jasonscheirer.com/apps/",
   makeAppInstaller: true,
@@ -24,6 +26,7 @@ const msixConfig: MakerMSIXConfig = {
     stop: { url: "my-app://hotkey?stop" },
   },
   appURIHandlers: ["jasonscheirer.com"],
+  fileExtensions: [".md", ".txt"],
   runAtStartup: true,
   startupParams: "--hello",
   updater: {
@@ -62,22 +65,25 @@ const config: ForgeConfig = {
   ],
   plugins: [
     new AutoUnpackNativesPlugin({}),
-    new WebpackPlugin({
-      mainConfig,
-      renderer: {
-        config: rendererConfig,
-        entryPoints: [
-          {
-            html: "./src/index.html",
-            js: "./src/renderer.ts",
-            name: "main_window",
-            preload: {
-              js: "./src/preload.ts",
+    {
+      name: "@electron-forge/plugin-webpack",
+      config: {
+        mainConfig,
+        renderer: {
+          config: rendererConfig,
+          entryPoints: [
+            {
+              html: "./src/index.html",
+              js: "./src/renderer.ts",
+              name: "main_window",
+              preload: {
+                js: "./src/preload.ts",
+              },
             },
-          },
-        ],
+          ],
+        },
       },
-    }),
+    },
     // Fuses are used to enable/disable various Electron functionality
     // at package time, before code signing the application
     new FusesPlugin({
