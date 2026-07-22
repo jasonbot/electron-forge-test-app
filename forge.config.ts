@@ -35,6 +35,7 @@ const msixConfig: MakerMSIXConfig = {
     publisherName: "Publisher McGee",
     updaterCacheDirName: "my-app-updater",
   },
+  unvirtualizedResources: true,
 }
 
 const config: ForgeConfig = {
